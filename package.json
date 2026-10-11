@@ -2,53 +2,26 @@
   "name": "kdp-product-factory",
   "version": "0.1.0",
   "private": true,
+  "description": "KDP Product Factory — original book product creation, deterministic print rendering, and preflight validation.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "dev": "next dev",
-    "build": "prisma generate && next build",
-    "start": "next start",
-    "postinstall": "prisma generate",
-    "lint": "next lint",
-    "seed": "tsx prisma/seed.ts",
-    "worker": "tsx src/lib/worker.ts",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "build": "npm run build -w @kdp/core && npm run build -w @kdp/api && npm run build -w @kdp/web",
+    "dev:api": "npm run dev -w @kdp/api",
+    "dev:worker": "npm run worker -w @kdp/api",
+    "dev:web": "npm run dev -w @kdp/web",
+    "db:migrate": "npm run db:migrate -w @kdp/api",
+    "db:seed": "npm run db:seed -w @kdp/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test -w @kdp/core && npm run test -w @kdp/api",
+    "test:core": "npm run test -w @kdp/core",
+    "test:api": "npm run test -w @kdp/api",
+    "test:e2e": "npm run test:e2e -w @kdp/web",
+    "fixtures": "npm run fixtures -w @kdp/core"
   },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
-    "@auth/prisma-adapter": "^2.7.4",
-    "@prisma/client": "^5.22.0",
-    "@radix-ui/react-slot": "^1.1.1",
-    "bullmq": "^5.34.0",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "ioredis": "^5.4.2",
-    "lucide-react": "^0.468.0",
-    "next": "15.5.27",
-    "next-auth": "^5.0.0-beta.25",
-    "nodemailer": "^7.0.7",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "recharts": "^2.15.0",
-    "stripe": "^17.5.0",
-    "tailwind-merge": "^2.6.0",
-    "tailwindcss-animate": "^1.0.7",
-    "zod": "^3.24.1"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.5",
-    "@types/nodemailer": "^6.4.20",
-    "@types/react": "^19.0.2",
-    "@types/react-dom": "^19.0.2",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49",
-    "prisma": "^5.22.0",
-    "tailwindcss": "^3.4.17",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+  "engines": {
+    "node": ">=20.10"
   }
 }

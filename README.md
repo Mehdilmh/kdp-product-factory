@@ -1,245 +1,231 @@
 # KDP Product Factory
 
-**AI-powered domain valuation SaaS.** Enter a domain (or bulk-upload a CSV) and get an
-estimated Buy-It-Now price range, a confidence score, an estimated time-to-sell, comparable
-sales, and a plain-English explanation — backed by transparent comps, never a bare number.
+A web application for planning, producing, validating, and exporting **original** Amazon KDP
+products: journals, notebooks, planners, logbooks, trackers, workbooks, activity, educational,
+nonfiction, illustrated and **coloring** books, in paperback, hardcover, and Kindle eBook formats.
+It includes an **image model library** (fal.ai catalog with live pricing) and a **Coloring Book
+Studio** (plan → generate → QC → review → interior → cover → preflight → export).
 
-> **Rename the whole product** by changing a single constant: `APP_NAME` in
-> [`src/config/app.ts`](src/config/app.ts). It flows through the UI, metadata, emails, and API docs.
+The core is a deterministic publishing engine. It handles print geometry, layout, embedded-font
+PDFs, cover geometry, and preflight checks. AI providers draft concepts, content, metadata, and
+cover art, and everything they draft stays editable. A human reviews every product before
+final export.
+
+> **No guarantees.** Validation reduces risk; it does **not** guarantee KDP acceptance, sales,
+> or policy compliance. KDP requirements change. The specification library records the source
+> and verification status of every value; check the current KDP help pages and the official
+> cover calculator before publishing.
+
+See [PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [TASKS.md](TASKS.md).
 
 ---
 
-## Quick start
+## Quick start (local development)
 
-The app runs with **zero third-party API keys**. Everything external falls back to mocks.
+Requirements: Node.js ≥ 20, PostgreSQL ≥ 14, Redis ≥ 6 (Redis is optional with `JOB_RUNNER=inline`).
 
 ```bash
-npm install
-cp .env.example .env          # set DATABASE_URL (Postgres); everything else is optional
-npx prisma migrate dev        # create the schema
-npm run seed                  # generate ~3,000 realistic historical sales
-npm run dev                   # http://localhost:3000
+cd kdp-factory
+npm install                                   # installs all workspaces, generates the Prisma client
+
+# Services: either your own Postgres/Redis or Docker
+docker compose up -d                          # postgres:16 + redis:7 (see docker-compose.yml)
+
+cp apps/api/.env.example apps/api/.env        # then set DATABASE_URL and a random APP_SECRET (≥ 32 chars)
+npm run db:migrate                            # prisma migrate deploy
+npm run db:seed                               # demo account + the 5 fixture projects
+
+# Three terminals:
+npm run dev:api                               # API on http://localhost:4000 (docs: /api/docs)
+npm run dev:worker                            # BullMQ worker (generation, validation, exports)
+npm run dev:web                               # web app on http://localhost:5173 (proxies /api)
 ```
 
-That's it. Sign in from `/login` using the **dev sign-in** (any email, no password, only
-enabled outside production) and you'll get 25 free credits.
+Sign in with **demo@kdp-factory.local / demo-password-123**, or register a new account.
 
-### Admin login (unlimited credits)
+**Single-process mode** (no Redis, no worker): set `JOB_RUNNER=inline` in `apps/api/.env` and
+skip `dev:worker`. Jobs then run inside the API process with the same retry and cancel semantics.
 
-Accounts whose email is in `ADMIN_EMAILS` are auto-promoted to the **admin** role and have
-**unlimited credits** — appraisals, bulk jobs, and API calls are never charged.
+**Production-style single origin:** `npm run build -w @kdp/web && npm run start -w @kdp/api`
+serves the built SPA and the API from port 4000.
 
-- The seed creates a ready-to-use admin: **`admin@kdp-product-factory.test`**. Sign in at `/login` with
-  that email (dev sign-in) to get an unlimited account immediately.
-- To make your own account admin, add your email:
-  `ADMIN_EMAILS="admin@kdp-product-factory.test,you@example.com"` in `.env`, then sign in with it (works
-  with Google/email providers too — promotion happens on sign-in). Existing accounts are promoted
-  automatically the next time they sign in.
+### AI providers
 
-The nav shows `∞ admin` for admin accounts and the live credit balance for everyone else.
+Without configuration, deterministic **mock** providers are used. They cost nothing and produce
+generic output that is clearly marked as AI-generated in the project. To use real providers,
+open **Settings → Providers** (keys are encrypted at rest and never shown again) or set server
+environment variables:
 
-### Requirements
+| Kind | Provider | Env var | Notes |
+|---|---|---|---|
+| Text | Google Gemini | `GEMINI_API_KEY` | Model configurable (default `gemini-2.5-flash`). |
+| Text | OpenAI-compatible | `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL` | Any `/chat/completions` endpoint. |
+| Image | fal.ai | `FAL_KEY` | Model library, cover art, coloring pages. Text on covers stays live text. |
 
-- Node 20+
-- PostgreSQL (a local instance is enough; set `DATABASE_URL` accordingly)
+Text-provider pricing for cost estimates is configured per provider. Estimates are not invoices.
 
----
+### Image model library (fal.ai) and pricing
 
-## What works without keys
+**What fal.ai officially exposes** (investigated before building; used through server-side
+calls only):
 
-| Concern             | With keys                          | Without keys (default)                        |
-| ------------------- | ---------------------------------- | --------------------------------------------- |
-| Cache & rate limit  | Redis (`REDIS_URL`)                | In-memory fallback                            |
-| Bulk jobs           | BullMQ worker (`npm run worker`)   | Processed in-process (fire-and-forget)        |
-| Auth                | Google OAuth / email magic links   | Dev credentials sign-in (email only)          |
-| Billing             | Stripe subscriptions + credit packs| Demo mode — checkout simulated, credits granted|
-| Explanation layer   | Anthropic (`ANTHROPIC_API_KEY`)    | Deterministic local explanation               |
-| Keyword / WHOIS / trademark | real providers (implement the interface) | Deterministic mock providers        |
+| Data | Official source | Notes |
+|---|---|---|
+| Model catalog | Platform API `GET https://api.fal.ai/v1/models` (`endpoint_id` lookup ≤ 50 per call, `category`/`q`/`status` search, cursor pagination, `expand=openapi-3.0`) | Gives display name, category, status and each endpoint's **OpenAPI input/output schema**, from which capabilities are derived (sizes, aspect ratios, resolutions, negative prompt, reference images, masks, seeds…). |
+| Prices | `GET /v1/models/pricing?endpoint_id=…` (needs `Authorization: Key …`) | `unit_price`, `unit`, `currency` per endpoint. Units vary (image, megapixel, tokens, seconds…); they are normalised and **never relabelled** (per-megapixel stays per-megapixel). |
+| Actual usage/cost | `GET /v1/models/usage` (needs an **Admin**-scope key, `FAL_ADMIN_KEY`) and the `X-Fal-Billable-Units` response header | Per-request actual cost is computed only when fal reports billable units; otherwise it is shown as "not reported". |
+| Generation | Official `@fal-ai/client` SDK queue API (`submit` → status → `result`) | Request id is stored before waiting, so retries resume instead of paying again. |
 
-All external providers live behind interfaces in [`src/lib/providers/`](src/lib/providers/) with
-mock implementations, so swapping in a real provider means implementing one interface.
+There is no public "sample image" field guaranteed by the API; cards show `thumbnail_url` only
+when the catalog provides it.
 
----
+**How it behaves**
 
-## Features
+- Seed models (Nano Banana 2/Pro, FLUX.1 schnell/dev, FLUX.2 variants, Seedream 4.5, Recraft V3,
+  GPT Image 2, Ideogram V3, edit/upscale models…) start as **"Candidate — not verified"**,
+  disabled, with **no price**. A catalog sync (Image models → *Sync catalog & prices*, platform
+  admins only; also automatic every `CATALOG_REFRESH_HOURS` when `FAL_KEY` is set) verifies each
+  endpoint and stores its schema. Endpoints not found are marked *Not found* and stay disabled.
+- Prices come only from fal's pricing API or an admin-recorded price **with an https source URL**
+  (history kept). Without one the UI shows **"Price unavailable"** and generation requires an
+  explicit "I accept an unverified cost" confirmation. Token-priced models need a
+  tokens-per-image assumption before they can be estimated.
+- Every generation (single, comparison, cover art, coloring batch) shows the estimate first and
+  the server rejects requests whose confirmed amount does not cover it. Workspace (daily/monthly),
+  project, per-member and per-book budget caps are enforced before each provider call.
+- Settings are validated against the model's own schema; unsupported options are rejected, not
+  silently dropped.
+- Two **offline mock** models (`mock/line-art`, `mock/cover-art`) draw procedural shapes for $0.
+  They are labelled "Not AI" everywhere and exist so the workflow can be tested without a key.
 
-- **Single appraisal** — hero search bar returning price range (low/mid/high), confidence,
-  months-to-sell, liquidity, a feature breakdown, and 5–10 comparable sales with date/price/similarity.
-- **Bulk appraisal** — CSV upload up to 5,000 rows, queued job, progress bar via polling,
-  downloadable CSV result.
-- **Portfolio** — save domains, track renewal dates, total value, renewal-cost-vs-value, and a
-  sortable **keep / drop** recommendation column.
-- **Renewal alerts** — daily cron (`/api/cron/renewals`) flags domains expiring within 30 days and
-  emails a digest.
-- **Comps transparency** — every estimate shows the sales that drove it. Never a bare number.
-- **Trademark risk flag** — `checkTrademark(domain)` service with a clean interface and mock data.
-- **Public API** — `POST /api/v1/appraise` with API keys, per-key rate limits, and an OpenAPI spec
-  at `/api/openapi` (docs at `/docs/api`).
-- **Accuracy page** — public backtest chart (`/accuracy`): predicted vs actual on the seeded dataset.
-- **Programmatic SEO** — `/appraisal/[domain]` pages with generated metadata, JSON-LD, and a free
-  limited preview that paywalls the full report.
+**Platform admins** are users listed in `PLATFORM_ADMIN_EMAILS` (or with `isPlatformAdmin`).
+Only they can sync the catalog, enable models, edit tags/limitations/commercial-use links and
+record prices.
 
----
+### Coloring Book Studio
 
-## The valuation engine
+*Coloring Studio* in the sidebar. A coloring book is a normal project (category `COLORING_BOOK`),
+so the interior editor, cover designer, metadata editor, preflight and export center all apply.
 
-Swappable module in [`src/lib/valuation/`](src/lib/valuation/):
-
-- **`features.ts`** — extracts length, TLD, hyphens, digits, dictionary-word detection, syllable
-  count, pronounceability, category classification, keyword volume (mock provider), and age.
-- **`model.ts`** — heuristic baseline scoring in **log-price space** (naturally right-skewed),
-  exposing the stable contract `predict(features) → { low, mid, high, confidence, ... }`.
-  Marked `TODO: replace with a trained GBM` — swap the internals, keep the interface.
-- **`comps.ts`** — cosine similarity over feature vectors against the seeded `Sale` table.
-- **`explain.ts`** — Claude call turning features + comps into one paragraph, **cached by domain
-  hash** (deterministic fallback when no key).
-- **`index.ts`** — the `appraise()` orchestrator: `cache → in-flight dedupe → features → model →
-  comps → trademark → explain`. Appraisals are cached **30 days**; identical concurrent requests
-  are **de-duplicated**.
-
-### Non-negotiables honored
-
-- Every appraisal response includes a **disclaimer** (estimates are opinions, not financial advice).
-- Credits are deducted **inside a transaction** with an immutable ledger — never optimistically
-  (see [`src/lib/credits.ts`](src/lib/credits.ts)).
-- **Zod validation** on every input (see [`src/schemas/`](src/schemas/)).
-
----
-
-## Data & seeding
-
-`npm run seed` ([`prisma/seed.ts`](prisma/seed.ts)) generates ~3,000 realistic historical sales:
-varied TLDs (weighted toward `.com`), a **log-normal / power-law** price distribution (not uniform),
-and sale dates spanning the last 4 years. Each row caches its feature vector for fast comps.
-
----
-
-## Design system
-
-Dark-first, emerald/amber — deliberately **not** the typical blue/indigo SaaS palette.
-
-| Token          | Value      |
-| -------------- | ---------- |
-| Background     | `#0B0F0E`  |
-| Surface        | `#131A18`  |
-| Border         | `#1F2C28`  |
-| Primary accent | `#14B87A` (emerald) |
-| Secondary      | `#E8B44A` (amber)   |
-| Danger         | `#E05252`  |
-| Text primary   | `#ECF2F0`  |
-| Text muted     | `#8A9C96`  |
-
-Fonts: **Space Grotesk** (headings), **Inter** (body), **JetBrains Mono** (domains & prices,
-always `tabular-nums`). Rounded-lg, 1px borders, no shadows, no gradients except one faint emerald
-radial glow behind the hero search bar.
-
----
-
-## Public API
-
-```bash
-curl -X POST http://localhost:3000/api/v1/appraise \
-  -H "Authorization: Bearer dp_live_xxx" \
-  -H "Content-Type: application/json" \
-  -d '{"domain": "cloudmind.io"}'
-```
-
-Rate limits per key (requests / 60s): Free 10, Pro 60, Agency 240. Limit headers on every response.
-Full spec: `GET /api/openapi`. Docs page: `/docs/api`.
-
----
-
-## Scripts
-
-| Command             | Description                                        |
-| ------------------- | -------------------------------------------------- |
-| `npm run dev`       | Start the dev server                               |
-| `npm run build`     | Production build                                   |
-| `npm run seed`      | Seed ~3,000 historical sales                       |
-| `npm run worker`    | BullMQ bulk worker (only needed when `REDIS_URL` set) |
-| `npm test`          | Vitest suite covering the valuation engine         |
-| `npm run typecheck` | `tsc --noEmit`                                      |
+1. **Create**: audience preset (Toddlers → Seniors), theme preset, description, age range,
+   difficulty, illustration count, series, trim (8.5×11, 8×10, 8.5×8.5, 8.25×8.25, A4, …),
+   single-sided printing, default model and budget cap.
+2. **Art direction**: style, outline thickness, detail, complexity, subject size, white space,
+   number of subjects, background, composition, aspect, extra direction; saved as a reusable
+   style profile. Prompts are built deterministically from it (black outlines on white, no
+   shading, no text…); hand-edited prompts are never overwritten.
+3. **Plan**: concepts from the theme or typed; similar concepts are flagged.
+4. **Generate**: select pages → model → per-page and total estimate (1/4/10/50/100 table) →
+   confirm → background job. Modes: new, variation, edit (image-to-image). Finished pages are kept
+   if later ones fail; retries resume the same provider request.
+5. **Review**: original and processed image side by side, version history with restore,
+   approve/reject/favorite/duplicate/replace/re-process, bulk actions. QC per image:
+   *automated* (decode, DPI at placed size, aspect, alpha), *heuristic* (white background, color
+   pixels, gray shading, contrast, ink coverage, line weight, cropping, empty areas, perceptual-hash
+   near-duplicates) and *manual* (text/watermarks, drawing quality, originality — never
+   auto-passed). Failed checks need an override note to approve; overrides are recorded.
+   Processing (flatten, grayscale, normalise, denoise, threshold, trim, pad-to-aspect, Lanczos
+   resample to 300 DPI) writes a new asset; originals are never modified.
+6. **Interior**: built from approved pages in order, with blank reverses in single-sided mode,
+   title/copyright/"belongs to"/test pages, scale and alignment. Page count is computed by the
+   layout engine; illustrations ≠ pages.
+7. **Cover**: the project cover designer (full-wrap geometry from the real page count) with the
+   *AI art* dialog for background art.
+8. **Preflight**: automated checks, visual (heuristic) warnings, manual review items, and official
+   requirements that need verification, shown separately. It is not an approval.
+9. **Metadata**: project metadata editor + back-cover copy and a coloring-specific checklist.
+10. **Export**: interior PDF, cover PDF, editable cover SVG, proof PDF, approved page images
+    (original + print), prompt/generation log CSV, QC report (JSON + HTML), preflight report,
+    metadata and a checksummed manifest. Final PDFs remain gated by preflight and reviews.
 
 ---
 
 ## Tests
 
 ```bash
-npm test
+npm run test:core        # 99 unit/integration tests: specs, margins/bleed, spine, cover geometry, layout,
+                         # PDF validity + determinism, font embedding, metadata, similarity, rules, EPUB/DOCX,
+                         # manifest, five fixture projects, pricing/estimates, OpenAPI capability derivation,
+                         # coloring prompts, repeated concepts, coloring interior (single/double-sided)
+npm run test:api         # 55 API tests: auth/sessions, isolation, roles, encrypted keys, uploads, providers,
+                         # job retries (inline + BullMQ/Redis), quotas, editors, covers, export gating,
+                         # batch, end-to-end workflow, fal catalog/pricing sync + queue flow (simulated HTTP),
+                         # confirmation/budgets, comparisons, cover art, coloring QC/processing/full workflow
+npm run test             # both
+
+# Browser end-to-end (Playwright, Chromium). Needs Postgres + a built web app:
+npm run build -w @kdp/web
+npm run test:e2e         # 2 specs (product workflow, Coloring Studio); starts the API with JOB_RUNNER=inline
 ```
 
-Vitest covers the valuation engine end-to-end (features, model, comps) in
-[`tests/`](tests/) — 26 tests asserting price ordering, range coherence, feature contributions,
-cosine ranking, and deterministic extraction.
+API tests use a separate database (`TEST_DATABASE_URL`, default
+`postgresql://postgres:postgres@localhost:5432/kdp_factory_test`), which is reset automatically.
+The BullMQ test is skipped if Redis is unreachable.
 
----
-
-## Renewal-alert cron
-
-Schedule a daily GET to `/api/cron/renewals` (Vercel Cron, GitHub Actions, any scheduler),
-protected by `CRON_SECRET`:
-
-```
-GET /api/cron/renewals?secret=$CRON_SECRET
-```
-
-## Deploying to Vercel
-
-The repo is Vercel-ready: `prisma generate` runs on build, `vercel.json` registers the daily
-renewal cron, and Auth.js is configured with `trustHost`.
-
-**1. Provision a hosted Postgres.** Vercel Postgres, Neon, or Supabase all work. Copy its
-connection string.
-
-**2. Import the repo** at [vercel.com/new](https://vercel.com/new) (or `npm i -g vercel && vercel`).
-Framework preset: **Next.js** (auto-detected).
-
-**3. Set environment variables** in the Vercel project settings:
-
-| Variable        | Required | Notes                                                        |
-| --------------- | -------- | ------------------------------------------------------------ |
-| `DATABASE_URL`  | ✅       | Hosted Postgres connection string                            |
-| `AUTH_SECRET`   | ✅       | `openssl rand -base64 32`                                    |
-| `ADMIN_EMAILS`  | ✅       | Your email(s) for the unlimited-credit admin account        |
-| `CRON_SECRET`   | recommended | Vercel sends it as the cron bearer token automatically   |
-| `REDIS_URL`     | recommended | Upstash Redis — see caveats below                        |
-| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | optional | Google login (dev sign-in is disabled in prod) |
-| `EMAIL_SERVER` / `EMAIL_FROM` | optional | Magic-link login + renewal digests            |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | optional | Real billing              |
-| `ANTHROPIC_API_KEY` | optional | Claude explanations (else deterministic fallback)         |
-
-`AUTH_URL` is auto-detected from the Vercel domain — no need to set it.
-
-**4. Migrate and seed the hosted database** (once, from your machine, pointing at the hosted DB):
+Generate the fixture outputs (interior/cover PDFs, SVG, EPUB, preflight reports) for manual
+inspection:
 
 ```bash
-DATABASE_URL="<hosted-connection-string>" npx prisma migrate deploy
-DATABASE_URL="<hosted-connection-string>" npm run seed
+npm run fixtures         # → packages/core/fixtures-out/<fixture>/
 ```
 
-**5. Log in** at `https://<your-app>.vercel.app/login`. In production the dev sign-in is disabled,
-so use Google/email — sign in with an address in `ADMIN_EMAILS` for the unlimited admin account.
-
-### Serverless caveats (important)
-
-Vercel runs each request in an isolated, short-lived function. Two features rely on shared/durable
-state and need extra infra in production:
-
-- **Cache & rate limiting** fall back to *in-memory* per-function state, which isn't shared across
-  Vercel lambdas. Set `REDIS_URL` (Upstash) so both work correctly across instances.
-- **Bulk jobs** use an in-process fallback that won't survive a serverless function freezing after
-  it responds. For reliable bulk processing, set `REDIS_URL` **and** run the BullMQ worker
-  (`npm run worker`) on a always-on host (Railway, Render, Fly.io, a small VM). Single appraisals,
-  the API, portfolio, and cron all work on Vercel as-is.
-
-> I can't deploy this for you from here — this environment has no Vercel CLI or token and its network
-> policy blocks Vercel's API. The steps above are everything needed; it's a ~2-minute import.
-
-## Stack
-
-Next.js 15 (App Router, server actions) · TypeScript · PostgreSQL + Prisma · Redis (optional) ·
-BullMQ · Auth.js · Stripe · Tailwind + a small shadcn-style UI kit · Recharts · Anthropic SDK.
+| Fixture | Format | Checks |
+|---|---|---|
+| `journal` | 100-page 6×9 B&W paperback, cream paper | 6"×9" pages, 0.375" min gutter, spine 0.25" (100 × 0.0025"), spine text allowed |
+| `workbook` | 8.5×11 paperback workbook | large trim, TOC from chapter openers, tables, checklists |
+| `hardcover` | 6×9 hardcover logbook, 120 pages | cover geometry from official calculator values (example values, flagged as such), hinges, low-content review item |
+| `ebook` | reflowable Kindle eBook | EPUB structure, nav, endnotes, 1600×2560 px cover |
+| `illustrated` | 8.5×8.5 premium-colour paperback with bleed | 8.625"×8.75" pages, bleed on the outside edge, full-bleed art ≥ 300 DPI |
 
 ---
 
-_Estimates are algorithmic opinions for informational purposes only — not financial advice._
+## Configuration reference (`apps/api/.env`)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | — | PostgreSQL connection string (required) |
+| `APP_SECRET` | — | ≥ 32 chars; derives the key that encrypts provider API keys (required) |
+| `JOB_RUNNER` | `bullmq` | `bullmq` (Redis + worker) or `inline` |
+| `REDIS_URL` | `redis://localhost:6379` | BullMQ connection |
+| `STORAGE_DRIVER` | `local` | `local` or `s3` |
+| `STORAGE_LOCAL_DIR` | `./storage` | Local storage root |
+| `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | | S3-compatible storage (AWS, MinIO, R2, …) |
+| `GEMINI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL`, `FAL_KEY` | | Optional server-level provider keys (`FAL_KEY` also enables catalog/price sync) |
+| `FAL_ADMIN_KEY` | | Admin-scope fal key for provider-reported usage/cost (`/v1/models/usage`) |
+| `FAL_PLATFORM_API_URL` | `https://api.fal.ai/v1` | fal Platform API base |
+| `PLATFORM_ADMIN_EMAILS` | | Comma-separated emails allowed to manage the image model catalog and prices |
+| `CATALOG_REFRESH_HOURS` | `24` | Automatic catalog + price refresh interval (0 disables) |
+| `IMAGE_DOWNLOAD_MAX_MB` | `60` | Size limit for downloading generated images (https only) |
+| `PORT` | `4000` | API port |
+| `SESSION_TTL_DAYS` | `14` | Sliding session lifetime |
+| `MAX_UPLOAD_MB` | `25` | Upload size limit |
+| `WORKER_CONCURRENCY` | `2` | Jobs processed in parallel per worker |
+
+---
+
+## Deployment notes
+
+* Run the API (`npm run start -w @kdp/api`) behind HTTPS (cookies are `Secure` in production),
+  with at least one worker (`npm run worker -w @kdp/api`). Workers scale horizontally.
+* Run `npm run db:migrate` on each deploy. Run the API with `NODE_ENV=production`.
+* Use S3-compatible storage in production. Local storage is per-machine.
+* Provider rate limiting is per process; for many workers, set conservative per-config limits.
+
+### Backup and restore
+
+* **Database:** `pg_dump -Fc "$DATABASE_URL" > kdp-$(date +%F).dump`; restore with
+  `pg_restore --clean --if-exists -d "$DATABASE_URL" kdp-YYYY-MM-DD.dump`.
+  Schedule daily dumps and keep point-in-time recovery if your host offers it.
+* **Objects:** enable bucket versioning and replicate or sync the bucket
+  (`aws s3 sync s3://bucket s3://backup-bucket`). For local storage, back up `STORAGE_LOCAL_DIR`.
+* **Secrets:** back up `APP_SECRET` separately. Encrypted provider keys cannot be decrypted
+  without it (re-enter them if it is lost).
+* **Restore test:** restore into a staging database, run `npm run db:migrate`, sign in, open a
+  project, and download an export to confirm its checksum matches the manifest.
+
+---
+
+## Repository layout note
+
+This repository also contains an unrelated, pre-existing Next.js app (DomainPulse) at the root.
+KDP Product Factory lives entirely in `kdp-factory/` and does not modify it.

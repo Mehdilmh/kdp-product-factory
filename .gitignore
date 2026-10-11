@@ -1,15 +1,15 @@
 node_modules
-.next
-out
-build
 dist
 .env
-.env.local
+.env.*
+!.env.example
+# Runtime data directories only (anchored so source folders named "storage" are not ignored)
+/apps/api/storage/
+/apps/api/storage-test/
+/storage/
+fixtures-out/
+coverage/
 *.log
-.DS_Store
-coverage
-.turbo
-next-env.d.ts
-prisma/dev.db
-*.tsbuildinfo
-_*.ts
+playwright-report/
+test-results/
+.vercel
