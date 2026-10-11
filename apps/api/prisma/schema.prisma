@@ -372,6 +372,8 @@ model GenerationJob {
   maxAttempts     Int        @default(3)
   timeoutMs       Int        @default(600000)
   cancelRequested Boolean    @default(false)
+  /// Serverless runner lease: a job slice owns the job until this time.
+  lockedUntil     DateTime?
   error           String?
   logs            Json       @default("[]")
   input           Json
@@ -769,4 +771,13 @@ model ColoringPageVersion {
 
   @@unique([pageId, version])
   @@index([generationId])
+}
+
+/// File bytes for STORAGE_DRIVER=db (serverless deployments without object storage).
+model StoredObject {
+  key         String   @id
+  data        Bytes
+  contentType String
+  sizeBytes   Int
+  createdAt   DateTime @default(now())
 }

@@ -42,6 +42,16 @@ export const MOCK_MODELS = [
   { endpointId: 'mock/cover-art', displayName: 'Offline mock — cover art', tasks: ['text-to-image', 'image-to-image'], tags: ['concept-drafts'], description: 'Procedural abstract artwork drawn locally. Not AI — for testing the workflow without API costs.' },
 ];
 
+let ensured: Promise<void> | null = null;
+/** ensureCatalog() at most once per process (request paths call this; it is idempotent). */
+export function ensureCatalogOnce(): Promise<void> {
+  ensured ??= ensureCatalog().catch((e) => {
+    ensured = null;
+    throw e;
+  });
+  return ensured;
+}
+
 export async function ensureCatalog() {
   for (const m of MOCK_MODELS) {
     const caps = deriveCapabilities(MOCK_INPUT_SCHEMA, { endpointId: m.endpointId, category: 'text-to-image', displayName: m.displayName });

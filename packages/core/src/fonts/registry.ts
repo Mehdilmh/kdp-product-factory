@@ -44,13 +44,20 @@ export function parseFontKey(key: FontKey): { family: FontFamily; bold: boolean;
   return { family, bold: variant.startsWith('bold'), italic: variant.endsWith('italic') };
 }
 
-export const FONTS_DIR = fileURLToPath(new URL('../../fonts/', import.meta.url));
+/**
+ * Directory holding the bundled font files. KDP_FONTS_DIR overrides it for bundled deployments
+ * (e.g. the Vercel function, where the fonts are copied next to the bundle).
+ */
+export function fontsDir(): string {
+  const d = process.env.KDP_FONTS_DIR || fileURLToPath(new URL('../../fonts/', import.meta.url));
+  return d.endsWith('/') ? d : d + '/';
+}
 
 const bytesCache = new Map<FontKey, Uint8Array>();
 export function fontBytes(key: FontKey): Uint8Array {
   let b = bytesCache.get(key);
   if (!b) {
-    b = new Uint8Array(readFileSync(FONTS_DIR + FONT_FILES[key]));
+    b = new Uint8Array(readFileSync(fontsDir() + FONT_FILES[key]));
     bytesCache.set(key, b);
   }
   return b;

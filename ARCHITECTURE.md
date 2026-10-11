@@ -3,7 +3,7 @@
 ## 1. Shape of the system
 
 ```
-kdp-factory/                       npm workspaces monorepo (Node ≥ 20)
+./                                 npm workspaces monorepo (Node ≥ 20)
 ├── packages/core   @kdp/core      Deterministic publishing engine (pure TypeScript, no I/O except bundled fonts)
 ├── apps/api        @kdp/api       Express REST API + BullMQ worker + Prisma/PostgreSQL + storage + AI providers
 └── apps/web        @kdp/web       React + Vite + Tailwind single-page app (shadcn-style components)

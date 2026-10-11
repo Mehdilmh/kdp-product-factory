@@ -2,6 +2,7 @@ import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } fro
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { config } from '../../config';
+import { prisma } from '../../db';
 
 export interface StorageAdapter {
   put(key: string, data: Uint8Array, contentType: string): Promise<void>;
@@ -58,6 +59,25 @@ export class S3Storage implements StorageAdapter {
   }
 }
 
+/** Stores bytes in PostgreSQL. No extra service; suited to serverless deployments of modest size. */
+export class DbStorage implements StorageAdapter {
+  async put(key: string, data: Uint8Array, contentType: string) {
+    assertSafeKey(key);
+    const bytes = Buffer.from(data);
+    await prisma.storedObject.upsert({ where: { key }, create: { key, data: bytes, contentType, sizeBytes: data.byteLength }, update: { data: bytes, contentType, sizeBytes: data.byteLength } });
+  }
+  async get(key: string) {
+    assertSafeKey(key);
+    const row = await prisma.storedObject.findUnique({ where: { key }, select: { data: true } });
+    if (!row) throw new Error(`Stored object not found: ${key}`);
+    return new Uint8Array(row.data);
+  }
+  async delete(key: string) {
+    assertSafeKey(key);
+    await prisma.storedObject.deleteMany({ where: { key } });
+  }
+}
+
 let storage: StorageAdapter | null = null;
 export function getStorage(): StorageAdapter {
   if (storage) return storage;
@@ -73,7 +93,8 @@ export function getStorage(): StorageAdapter {
       }),
       c.S3_BUCKET,
     );
-  } else storage = new LocalStorage(c.STORAGE_LOCAL_DIR);
+  } else if (c.STORAGE_DRIVER === 'db') storage = new DbStorage();
+  else storage = new LocalStorage(c.STORAGE_LOCAL_DIR);
   return storage;
 }
 export function setStorage(s: StorageAdapter) {

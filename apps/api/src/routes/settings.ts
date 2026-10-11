@@ -1,4 +1,4 @@
-import { defaultSpecSource, FONT_FILES, FONTS_DIR } from '@kdp/core';
+import { defaultSpecSource, FONT_FILES, fontsDir } from '@kdp/core';
 import type { Prisma } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
@@ -126,5 +126,5 @@ const fontFiles = new Set(Object.values(FONT_FILES));
 settingsRouter.get('/fonts/:file', (req, res) => {
   if (!fontFiles.has(req.params.file)) return res.status(404).end();
   res.setHeader('Cache-Control', 'public, max-age=86400');
-  res.type('font/ttf').sendFile(FONTS_DIR + req.params.file);
+  res.type('font/ttf').sendFile(fontsDir() + req.params.file);
 });

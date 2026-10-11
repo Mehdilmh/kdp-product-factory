@@ -17,6 +17,8 @@ export const JOB_TYPES = ['GENERATE', 'VALIDATE', 'EXPORT', 'BATCH_ITEM', 'IMAGE
 export const JobType = z.enum(JOB_TYPES);
 
 export class CancelledError extends Error {}
+/** Thrown at a safe point when a serverless time slice is used up; the runner continues the job. */
+export class YieldError extends Error {}
 
 export interface StageDef {
   name: string;
@@ -65,7 +67,7 @@ export function isRetryable(e: unknown) {
  * Executes one attempt of a job. Throws on failure; the runner decides whether to retry.
  * Stages already completed in a previous attempt are skipped (resume after retry).
  */
-export async function processJob(jobId: string): Promise<void> {
+export async function processJob(jobId: string, opts: { deadline?: number } = {}): Promise<void> {
   const job = await prisma.generationJob.findUniqueOrThrow({ where: { id: jobId } });
   if (job.status === 'CANCELLED' || job.status === 'SUCCEEDED') return;
   if (job.cancelRequested) {
@@ -77,12 +79,23 @@ export async function processJob(jobId: string): Promise<void> {
   const ctrl = new AbortController();
   const result = ((job.result as Record<string, unknown>) ?? {}) as Record<string, unknown>;
   const save = (data: Prisma.GenerationJobUpdateInput) => prisma.generationJob.update({ where: { id: jobId }, data });
+  /**
+   * Safe point before each unit of work (stage, image, page): true when cancellation was requested;
+   * throws YieldError when the time slice is used up. The first safe point of a slice never yields,
+   * so every slice completes at least one unit of work (no livelock on slow starts).
+   */
+  let safePoints = 0;
+  const checkpoint = async () => {
+    if (await isCancelled(jobId)) return true;
+    if (safePoints++ > 0 && opts.deadline && Date.now() > opts.deadline) throw new YieldError('Time slice used up');
+    return false;
+  };
 
   const runStages = async (project: Project, stages: StageDef[]) => {
     const done = new Set((result.completedStages as string[]) ?? []);
     for (const [i, st] of stages.entries()) {
       if (done.has(st.name)) continue;
-      if (await isCancelled(jobId)) throw new CancelledError('Cancelled by user');
+      if (await checkpoint()) throw new CancelledError('Cancelled by user');
       await save({ stage: st.name, progress: Math.round((i / stages.length) * 100) });
       await appendLog(jobId, `Stage "${st.name}" started.`);
       if (st.status) await advanceStatus(project.id, st.status);
@@ -121,12 +134,12 @@ export async function processJob(jobId: string): Promise<void> {
       case 'IMAGE_GENERATE':
       case 'MODEL_COMPARE':
         await save({ stage: 'images' });
-        await runImageJob(job, () => isCancelled(jobId), (m) => void appendLog(jobId, m), ctrl.signal);
+        await runImageJob(job, checkpoint, (m) => void appendLog(jobId, m), ctrl.signal);
         if (await isCancelled(jobId)) throw new CancelledError('Cancelled by user');
         break;
       case 'COLORING_GENERATE':
         await save({ stage: 'coloring-pages' });
-        await runColoringJob(job, () => isCancelled(jobId), (m) => void appendLog(jobId, m), ctrl.signal);
+        await runColoringJob(job, checkpoint, (m) => void appendLog(jobId, m), ctrl.signal);
         if (await isCancelled(jobId)) throw new CancelledError('Cancelled by user');
         break;
       case 'BATCH_ITEM':
@@ -139,6 +152,12 @@ export async function processJob(jobId: string): Promise<void> {
     await appendLog(jobId, 'Job completed.');
   } catch (e) {
     ctrl.abort();
+    if (e instanceof YieldError) {
+      // Not a failed attempt: finished work is saved; the runner continues in a new invocation.
+      await save({ status: 'QUEUED', stage: 'continuing', attempts: { decrement: 1 } });
+      await appendLog(jobId, 'Paused at a safe point; continuing in a new invocation.');
+      throw e;
+    }
     if (e instanceof CancelledError) {
       await save({ status: 'CANCELLED', stage: 'cancelled', finishedAt: new Date() });
       await appendLog(jobId, 'Job cancelled at a safe point.', 'warn');

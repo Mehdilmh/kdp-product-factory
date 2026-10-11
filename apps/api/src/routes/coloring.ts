@@ -24,6 +24,7 @@ import {
   styleOf,
   themeConcepts,
 } from '../services/coloring';
+import { kickStaleJobs } from '../jobs/runner';
 import { createJob } from '../services/jobs';
 import { cachedLayout } from '../services/preview';
 
@@ -85,7 +86,10 @@ defineRoute(coloringRouter, { method: 'post', path: '/coloring', summary: 'Creat
   return bookDetail(await getBook(ws.workspaceId, b.id));
 });
 
-defineRoute(coloringRouter, { method: 'get', path: '/coloring/:id', summary: 'Book detail: pages, versions, QC, costs, similarity', tag: 'Coloring', params: IdParams }, async ({ ws, params }) => bookDetail(await getBook(ws.workspaceId, params.id)));
+defineRoute(coloringRouter, { method: 'get', path: '/coloring/:id', summary: 'Book detail: pages, versions, QC, costs, similarity', tag: 'Coloring', params: IdParams }, async ({ ws, params }) => {
+  await kickStaleJobs(ws.workspaceId);
+  return bookDetail(await getBook(ws.workspaceId, params.id));
+});
 
 const PatchBook = z.object({
   audience: Audience.optional(),

@@ -8,7 +8,7 @@ import { audit } from '../lib/audit';
 import { requireUser } from '../lib/auth';
 import { badRequest, forbidden, HttpError, notFound } from '../lib/errors';
 import { defineRoute, IdParams, queryBool } from '../lib/route';
-import { ensureCatalog, getModel, modelDto, syncCatalog, syncProviderUsage, estimateFor } from '../services/image-catalog';
+import { ensureCatalogOnce, getModel, modelDto, syncCatalog, syncProviderUsage, estimateFor } from '../services/image-catalog';
 import { checkConfirmation, NormalizedRequestSchema, prepareGeneration } from '../services/image-generation';
 import { createJob } from '../services/jobs';
 
@@ -48,7 +48,7 @@ const ListQuery = z.object({
 });
 
 defineRoute(imageModelRouter, { method: 'get', path: '/image-models', summary: 'Image model library with pricing and an estimate for the given settings', tag: 'Image models', query: ListQuery }, async ({ query, ws: auth }) => {
-  await ensureCatalog();
+  await ensureCatalogOnce();
   const where: Prisma.ImageModelWhereInput = {};
   if (!query.includeUnavailable) where.OR = [{ enabled: true }, { availability: 'CANDIDATE_UNVERIFIED' }];
   if (!query.includeMock) where.provider = { not: 'mock' };

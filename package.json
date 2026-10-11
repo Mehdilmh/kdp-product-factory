@@ -19,9 +19,13 @@
     "test:core": "npm run test -w @kdp/core",
     "test:api": "npm run test -w @kdp/api",
     "test:e2e": "npm run test:e2e -w @kdp/web",
-    "fixtures": "npm run fixtures -w @kdp/core"
+    "fixtures": "npm run fixtures -w @kdp/core",
+    "vercel-build": "node scripts/vercel-build.mjs"
   },
   "engines": {
     "node": ">=20.10"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

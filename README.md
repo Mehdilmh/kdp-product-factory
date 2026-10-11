@@ -25,7 +25,6 @@ See [PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md), and [TASKS.md](TASKS
 Requirements: Node.js ≥ 20, PostgreSQL ≥ 14, Redis ≥ 6 (Redis is optional with `JOB_RUNNER=inline`).
 
 ```bash
-cd kdp-factory
 npm install                                   # installs all workspaces, generates the Prisma client
 
 # Services: either your own Postgres/Redis or Docker
@@ -185,9 +184,12 @@ npm run fixtures         # → packages/core/fixtures-out/<fixture>/
 |---|---|---|
 | `DATABASE_URL` | — | PostgreSQL connection string (required) |
 | `APP_SECRET` | — | ≥ 32 chars; derives the key that encrypts provider API keys (required) |
-| `JOB_RUNNER` | `bullmq` | `bullmq` (Redis + worker) or `inline` |
+| `JOB_RUNNER` | `bullmq` (`serverless` on Vercel) | `bullmq` (Redis + worker), `inline`, or `serverless` (time-sliced, self-continuing) |
+| `JOB_SLICE_SECONDS` | `240` | Serverless runner: work per invocation before pausing at a safe point |
+| `APP_URL` | | Public URL used for job continuations (detected from requests when unset) |
+| `CRON_SECRET` | | Authorizes the daily catalog refresh cron (`/api/internal/cron/catalog`) |
 | `REDIS_URL` | `redis://localhost:6379` | BullMQ connection |
-| `STORAGE_DRIVER` | `local` | `local` or `s3` |
+| `STORAGE_DRIVER` | `local` (`db`/`s3` on Vercel) | `local`, `s3`, or `db` (PostgreSQL) |
 | `STORAGE_LOCAL_DIR` | `./storage` | Local storage root |
 | `S3_BUCKET`, `S3_REGION`, `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | | S3-compatible storage (AWS, MinIO, R2, …) |
 | `GEMINI_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`, `OPENAI_COMPATIBLE_BASE_URL`, `FAL_KEY` | | Optional server-level provider keys (`FAL_KEY` also enables catalog/price sync) |
@@ -203,7 +205,42 @@ npm run fixtures         # → packages/core/fixtures-out/<fixture>/
 
 ---
 
-## Deployment notes
+## Deploying on Vercel
+
+The repository deploys to Vercel as-is (`vercel.json` + `scripts/vercel-build.mjs`, Build Output
+API): the web app is served as static files and one Node.js function serves `/api/*`.
+
+1. **Database.** Create a PostgreSQL database (Vercel → Storage → Neon is the simplest; any
+   Postgres works). It provides `DATABASE_URL` (and `DATABASE_URL_UNPOOLED`, which the build uses
+   for migrations).
+2. **Environment variables** (Project → Settings → Environment Variables), for Production and
+   Preview:
+   - `DATABASE_URL` — required.
+   - `APP_SECRET` — required, 32+ random characters (e.g. `openssl rand -hex 32`). Keep it stable:
+     it encrypts stored provider keys.
+   - `CRON_SECRET` — any random string; enables the daily catalog/price refresh cron.
+   - Optional: `FAL_KEY`, `FAL_ADMIN_KEY`, `PLATFORM_ADMIN_EMAILS`, `GEMINI_API_KEY`, and S3
+     settings (see below).
+3. **Import** the repository in Vercel (*Add New → Project*). Leave the framework as *Other*; the
+   build and install commands come from `vercel.json`. Deploy.
+4. The build runs `prisma migrate deploy`, builds the web app and bundles the API. Open the site
+   and register the first account.
+
+How it runs on Vercel:
+
+- **Jobs** use the `serverless` runner: a job works for up to `JOB_SLICE_SECONDS` (default 240)
+  per invocation, pauses at a safe point (finished stages, images and pages are saved) and a fresh
+  invocation continues it. If an invocation is interrupted, the job's lease expires and the next
+  status poll from the web app resumes it. Nothing already completed (or paid for) is repeated.
+- **Files** go to PostgreSQL by default (`STORAGE_DRIVER=db`), so no extra service is needed. For
+  larger catalogs, set `S3_BUCKET` (+ `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
+  e.g. Cloudflare R2), which switches the driver to `s3`.
+- **Limits to know:** Vercel limits request bodies to 4.5 MB, so uploads larger than that fail
+  there (use the self-hosted setup for very large uploads). The function is configured for
+  300 s and 2 GB (`FUNCTION_MAX_DURATION`, `FUNCTION_MEMORY_MB` at build time); plans that do not
+  allow these values need lower ones. Large exports are generated in background jobs.
+
+## Deployment notes (self-hosted)
 
 * Run the API (`npm run start -w @kdp/api`) behind HTTPS (cookies are `Secure` in production),
   with at least one worker (`npm run worker -w @kdp/api`). Workers scale horizontally.
@@ -225,7 +262,13 @@ npm run fixtures         # → packages/core/fixtures-out/<fixture>/
 
 ---
 
-## Repository layout note
+## Repository layout
 
-This repository also contains an unrelated, pre-existing Next.js app (DomainPulse) at the root.
-KDP Product Factory lives entirely in `kdp-factory/` and does not modify it.
+```
+apps/api        Express API, Prisma schema/migrations, jobs, providers (Node 20+)
+apps/web        React + Vite web app
+packages/core   deterministic engine: specs, layout, PDF/SVG/EPUB, preflight, pricing, coloring
+scripts/        vercel-build.mjs (Vercel Build Output)
+```
+
+This repository was split out of `Domain-Names`; the unrelated domain-valuation app stayed there.

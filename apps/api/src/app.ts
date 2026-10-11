@@ -23,6 +23,9 @@ import { metadataRouter } from './routes/metadata';
 import { projectRouter } from './routes/projects';
 import { settingsRouter } from './routes/settings';
 import { validationRouter } from './routes/validation';
+import { getRunner } from './jobs/runner';
+import { rememberOrigin, verifyInternalJobToken } from './lib/origin';
+import { syncCatalog } from './services/image-catalog';
 import { workspaceRouter } from './routes/workspaces';
 
 let openapiDoc: ReturnType<OpenApiGeneratorV3['generateDocument']> | null = null;
@@ -57,6 +60,34 @@ export function createApp() {
     }),
   );
   app.use(express.json({ limit: '5mb' }));
+  app.use(rememberOrigin);
+  // Serverless runner continuation (called by the app itself; authenticated by a per-job HMAC token).
+  app.post('/api/internal/jobs/:id/continue', async (req, res) => {
+    if (!verifyInternalJobToken(req.params.id, req.get('x-kdp-job-token'))) {
+      res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Invalid job token' } });
+      return;
+    }
+    await getRunner().enqueue(req.params.id);
+    res.status(202).json({ ok: true });
+  });
+  // Scheduled catalog/price refresh (Vercel Cron sends "Authorization: Bearer $CRON_SECRET").
+  app.get('/api/internal/cron/catalog', async (req, res, next) => {
+    try {
+      const secret = process.env.CRON_SECRET;
+      if (!secret || req.get('authorization') !== `Bearer ${secret}`) {
+        res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Cron secret required' } });
+        return;
+      }
+      if (!config().FAL_KEY) {
+        res.json({ skipped: 'FAL_KEY is not configured' });
+        return;
+      }
+      const r = await syncCatalog({ discover: true, pricing: true });
+      res.json({ verified: r.verified.length, discovered: r.discovered.length, priced: r.priced.length, errors: r.errors.length });
+    } catch (e) {
+      next(e);
+    }
+  });
   app.use(cookieParser());
   app.use('/api', rateLimit({ windowMs: 60_000, limit: config().NODE_ENV === 'test' ? 100_000 : 600, standardHeaders: true, legacyHeaders: false }));
   app.use('/api', loadSession, csrfGuard);

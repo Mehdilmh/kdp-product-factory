@@ -14,6 +14,10 @@ code (domain valuation) is reusable for publishing, and mixing two products into
 app would couple their deployments, schemas and auth. If the owner later wants the KDP app to
 replace DomainPulse, `kdp-factory/` can be promoted to the root in one move.
 
+**Update (October 2026):** the owner moved the project to its own repository,
+`kdp-product-factory`, where the former `kdp-factory/` contents are the repository root and the
+domain-valuation app is not included. The app also deploys to Vercel (see README).
+
 ## 1. Guiding principles
 
 1. **Deterministic core first.** Print geometry, layout, PDF rendering, and technical

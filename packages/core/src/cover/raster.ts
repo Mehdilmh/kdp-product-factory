@@ -1,5 +1,5 @@
 import { Resvg } from '@resvg/resvg-js';
-import { FONT_FILES, FONTS_DIR } from '../fonts/registry';
+import { FONT_FILES, fontsDir } from '../fonts/registry';
 
 /**
  * Rasterise an SVG (e.g. the eBook front cover) to PNG with the bundled fonts.
@@ -10,7 +10,7 @@ export function rasterizeSvg(svg: string, widthPx: number): Uint8Array {
     fitTo: { mode: 'width', value: widthPx },
     font: {
       loadSystemFonts: false,
-      fontFiles: Object.values(FONT_FILES).map((f) => FONTS_DIR + f),
+      fontFiles: Object.values(FONT_FILES).map((f) => fontsDir() + f),
       defaultFontFamily: 'Caladea',
     },
     background: '#ffffff',

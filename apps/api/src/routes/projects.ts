@@ -6,6 +6,7 @@ import { prisma } from '../db';
 import { audit } from '../lib/audit';
 import { badRequest } from '../lib/errors';
 import { defineRoute, IdParams } from '../lib/route';
+import { kickStaleJobs } from '../jobs/runner';
 import { createJob } from '../services/jobs';
 import { createProject, getProject, projectSummary, setStatus, STATUS_ORDER } from '../services/projects';
 import { CreateProjectInput, GenerationSettings, UpdateBriefInput, UpdateFormatInput } from '../services/schemas';
@@ -52,7 +53,10 @@ defineRoute(projectRouter, { method: 'post', path: '/projects', summary: 'Create
   return projectSummary(ws.workspaceId, p.id);
 });
 
-defineRoute(projectRouter, { method: 'get', path: '/projects/:id', summary: 'Project detail', tag: 'Projects', params: IdParams }, async ({ ws, params }) => projectSummary(ws.workspaceId, params.id));
+defineRoute(projectRouter, { method: 'get', path: '/projects/:id', summary: 'Project detail', tag: 'Projects', params: IdParams }, async ({ ws, params }) => {
+  await kickStaleJobs(ws.workspaceId);
+  return projectSummary(ws.workspaceId, params.id);
+});
 
 defineRoute(projectRouter, { method: 'patch', path: '/projects/:id', summary: 'Update project fields, brief, format, or status', tag: 'Projects', params: IdParams, body: z.object({ title: z.string().trim().min(1).max(200).optional(), contentClass: z.enum(['LOW', 'MEDIUM', 'FULL']).optional(), status: z.enum(STATUS_ORDER as [string, ...string[]]).optional(), aiDisclosureAck: z.boolean().optional(), brief: UpdateBriefInput.optional(), format: UpdateFormatInput.optional() }) }, async ({ ws, params, body, req }) => {
   const p = await getProject(ws.workspaceId, params.id);

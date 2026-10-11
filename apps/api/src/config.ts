@@ -6,8 +6,12 @@ const Env = z.object({
   DATABASE_URL: z.string().min(1),
   APP_SECRET: z.string().min(32, 'APP_SECRET must be at least 32 characters'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
-  JOB_RUNNER: z.enum(['bullmq', 'inline']).default('bullmq'),
-  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  /** bullmq = Redis + worker; inline = in-process; serverless = time-sliced, self-continuing (Vercel). */
+  JOB_RUNNER: z.enum(['bullmq', 'inline', 'serverless']).default(process.env.VERCEL ? 'serverless' : 'bullmq'),
+  /** local = disk; s3 = S3-compatible bucket; db = PostgreSQL (no extra service; fine for small/medium use). */
+  STORAGE_DRIVER: z.enum(['local', 's3', 'db']).default(process.env.VERCEL ? (process.env.S3_BUCKET ? 's3' : 'db') : 'local'),
+  /** Serverless runner: seconds of work per invocation before pausing at a safe point. */
+  JOB_SLICE_SECONDS: z.coerce.number().int().min(10).max(900).default(240),
   STORAGE_LOCAL_DIR: z.string().default('./storage'),
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().default('us-east-1'),
